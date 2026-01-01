@@ -1,0 +1,14 @@
+{
+  "build": {
+    "env": {
+      "SKIP_ENV_VALIDATION": "1"
+    }
+  },
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/cleanup/shift-photos?months=12",
+      "schedule": "0 0 1 * *"
+    }
+  ]
+}
