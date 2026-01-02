@@ -10,6 +10,7 @@ import { GET_PRODUCTS, GET_INACTIVE_PRODUCTS } from "@/graphql/inventory/product
 import { useModal } from "@/hooks/useModal";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { exportProductsToExcel } from "@/utils/export-products";
+import { DEMO_MODE } from "@/utils/demoMode";
 import { useQuery } from "@apollo/client";
 import { Button, message, Skeleton, Tabs } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -106,7 +107,7 @@ const Product = () => {
 							Export to Excel
 						</Button>
 					)}
-					{(userRole === 'SUPER_ADMIN' || userPermissions?.product?.includes('addEdit')) && (
+					{!DEMO_MODE && (userRole === 'SUPER_ADMIN' || userPermissions?.product?.includes('addEdit')) && (
 						<Button key="add" type="primary" onClick={() => openModal()}>
 							Add Product
 						</Button>

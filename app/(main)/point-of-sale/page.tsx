@@ -25,6 +25,7 @@ import {
 import { ME_QUERY } from "@/graphql/auth/me";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { useOfflineSync } from "@/hooks/useOfflineSync";
+import { DEMO_MODE } from "@/utils/demoMode";
 import { PHP_BILLS } from "@/utils/constant";
 import { CartProduct, pesoFormatter } from "@/utils/helper";
 import { generateReceiptHTML, generateBillHTML } from "@/utils/receiptPage";
@@ -552,6 +553,13 @@ const PointOfSale = () => {
   }, [hasCashDrawer, cart.length, orderType, tableNumber, messageApi]);
 
   const handleCheckout = useCallback(async () => {
+    // Demo mode check
+    if (DEMO_MODE) {
+      messageApi.info("Demo Mode - Transactions are disabled in this portfolio demonstration");
+      setPaymentModalOpen(false);
+      return;
+    }
+
     // Validation checks
     if (!hasCashDrawer) {
       messageApi.error("Please open cash drawer first");
@@ -794,6 +802,18 @@ const PointOfSale = () => {
       }}
     >
       {contextHolder}
+
+      {/* Demo Mode Alert */}
+      {DEMO_MODE && (
+        <Alert
+          message="Read-Only Demo Mode"
+          description="You can browse products and add them to cart, but checkout/payment is disabled for this portfolio demonstration."
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          closable
+        />
+      )}
 
       {/* Offline Sync Status - Inline */}
       <div style={{ marginBottom: 12 }}>

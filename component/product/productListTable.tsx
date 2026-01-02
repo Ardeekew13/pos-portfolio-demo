@@ -5,6 +5,7 @@ import { GET_PRODUCTS_BY_INGREDIENT } from "@/graphql/inventory/productsByIngred
 import { GET_ITEMS } from "@/graphql/inventory/items";
 import { pesoFormatter } from "@/utils/helper";
 import { hasPermission } from "@/utils/permissions";
+import { DEMO_MODE } from "@/utils/demoMode";
 import { DeleteOutlined, FilterOutlined, ExclamationCircleFilled } from "@ant-design/icons";
 import { useLazyQuery, useMutation, useQuery } from "@apollo/client";
 import {
@@ -161,7 +162,7 @@ const ProductListTable = (props: IProps) => {
             <Button type="link" size="small" onClick={() => openModal(record)}>
               View
             </Button>
-            {(userRole === "SUPER_ADMIN" ||
+            {!DEMO_MODE && (userRole === "SUPER_ADMIN" ||
               hasPermission(userPermissions, "product", "delete")) && (
               <Popconfirm
                 title="Delete Item"

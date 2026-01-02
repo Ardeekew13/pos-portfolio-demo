@@ -1,5 +1,4 @@
 "use client";
-import AuthGuard from "@/component/auth/AuthGuard";
 import OfflineIndicator from "@/component/common/OfflineIndicator";
 import dynamic from "next/dynamic";
 
@@ -13,9 +12,9 @@ export default function MainLayout({
 	children: React.ReactNode;
 }) {
 	return (
-		<AuthGuard>
+		<>
 			<OfflineIndicator />
 			<NavbarLayout>{children}</NavbarLayout>
-		</AuthGuard>
+		</>
 	);
 }
