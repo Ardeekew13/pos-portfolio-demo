@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import { useMediaQuery } from "react-responsive";
 import { hasPermission } from "@/utils/permissions";
+import { DEMO_MODE } from "@/utils/demoMode";
 
 const { Header, Content, Sider } = Layout;
 
@@ -74,16 +75,17 @@ export default function NavbarLayout({
 	children: React.ReactNode;
 }) {
 	const { data: meData, loading: meLoading } = useQuery(ME_QUERY, {
-		fetchPolicy: 'network-only', // Always fetch fresh data to prevent stale cache issues
+		fetchPolicy: 'network-only',
+		skip: DEMO_MODE, // Skip auth query in demo mode
 	});
-	const user = meData?.me;
+	const user = DEMO_MODE ? null : meData?.me;
 	const userPermissions = user?.permissions || {};
-	const userRole = user?.role;
+	const userRole = DEMO_MODE ? "SUPER_ADMIN" : user?.role;
 	const apolloClient = useApolloClient();
 
 	const items = useMemo(() => {
-		// SUPER_ADMIN has full access to all menu items
-		if (userRole === 'SUPER_ADMIN') {
+		// Demo mode or SUPER_ADMIN has full access to all menu items
+		if (DEMO_MODE || userRole === 'SUPER_ADMIN') {
 			return allItems;
 		}
 		

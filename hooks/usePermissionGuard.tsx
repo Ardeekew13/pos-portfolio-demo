@@ -5,6 +5,7 @@ import { useQuery } from "@apollo/client";
 import { ME_QUERY } from "@/graphql/auth/me";
 import { Query } from "@/generated/graphql";
 import { hasPermission, hasAnyPermission } from "@/utils/permissions";
+import { DEMO_MODE } from "@/utils/demoMode";
 import type { PermissionAction } from "@/utils/permissions";
 
 interface UsePermissionGuardOptions {
@@ -27,13 +28,17 @@ export const usePermissionGuard = ({
 }: UsePermissionGuardOptions) => {
   const router = useRouter();
   const { data: meData, loading: meLoading } = useQuery<Query>(ME_QUERY, {
-    fetchPolicy: "network-only", // Always fetch fresh data to prevent stale cache issues
+    fetchPolicy: "network-only",
+    skip: DEMO_MODE, // Skip query in demo mode
   });
   
   const userPermissions = meData?.me?.permissions || {};
   const userRole = meData?.me?.role;
 
   useEffect(() => {
+    // In demo mode, grant full access to all pages
+    if (DEMO_MODE) return;
+
     // Don't check permissions while loading
     if (meLoading) return;
 
@@ -68,6 +73,16 @@ export const usePermissionGuard = ({
       }
     }
   }, [meData, meLoading, userRole, userPermissions, module, action, anyActions, redirectTo, router]);
+
+  // In demo mode, return full access with no loading
+  if (DEMO_MODE) {
+    return {
+      loading: false,
+      hasAccess: true,
+      userPermissions: {},
+      userRole: "SUPER_ADMIN",
+    };
+  }
 
   return {
     loading: meLoading,
