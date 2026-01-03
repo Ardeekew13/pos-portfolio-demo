@@ -4,6 +4,7 @@ import { typeDefs } from "../schema";
 import { resolvers } from "@/app/api/graphql/resolver";
 import dbConnect from "@/lib/mongodb";
 import { verifyToken, DecodedUser } from "@/lib/auth";
+import { DEMO_MODE } from "@/utils/demoMode";
 import User from "@/app/api/graphql/models/User";
 import type { NextRequest } from "next/server";
 
@@ -23,6 +24,17 @@ const handler = startServerAndCreateNextHandler<NextRequest, GraphQLContext>(ser
     const request = req as NextRequest;
 
     await dbConnect();
+
+    // Demo mode: provide mock super admin user for read access
+    if (DEMO_MODE) {
+      const mockUser: DecodedUser & { permissions?: Record<string, string[]> } = {
+        id: "demo-user",
+        username: "demo",
+        role: "SUPER_ADMIN",
+        permissions: {},
+      };
+      return { user: mockUser, request };
+    }
 
     // Extract user from cookie (same as auth resolvers)
     const authToken = request.cookies.get("auth_token")?.value ?? "";

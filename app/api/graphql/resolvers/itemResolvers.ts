@@ -6,6 +6,7 @@ import { errorResponse, successResponse } from "../utils/response";
 import { update } from "lodash";
 import { GraphQLContext } from "../context";
 import User from "../models/User";
+import { DEMO_MODE } from "@/utils/demoMode";
 
 export const itemResolvers = {
 	Query: {
@@ -97,6 +98,11 @@ export const itemResolvers = {
 			},
 			{ user }: GraphQLContext
 		) => {
+			// Block mutations in demo mode
+			if (DEMO_MODE) {
+				return errorResponse("Demo mode - modifications are disabled");
+			}
+
 			// Check authentication
 			if (!user) {
 				return errorResponse("Not authenticated");
@@ -231,6 +237,11 @@ export const itemResolvers = {
 			}
 		},
 		deleteItem: async (_: unknown, { _id }: { _id: string }, { user }: GraphQLContext) => {
+			// Block mutations in demo mode
+			if (DEMO_MODE) {
+				return errorResponse("Demo mode - modifications are disabled");
+			}
+
 			// Check authentication
 			if (!user) {
 				return errorResponse("Not authenticated");
