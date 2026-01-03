@@ -62,7 +62,8 @@ export default function Home() {
       endDate,
       year,
     },
-    fetchPolicy: "cache-and-network", // Use cache first, then network
+    fetchPolicy: "cache-first", // Use cache first for faster loads
+    nextFetchPolicy: "cache-first", // Keep using cache for subsequent requests
   });
   const isMobile = useMediaQuery({ query: "(max-width: 768px)" });
   const [mode, setMode] = useState("All");

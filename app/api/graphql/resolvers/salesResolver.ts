@@ -261,75 +261,90 @@ export const salesResolver = {
 					};
 				}
 
-				// ===== OPTIMIZED: Use aggregation pipeline for current period stats =====
-				const [currentPeriodStats] = await Sale.aggregate([
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: null,
-							totalAmountSales: { $sum: "$totalAmount" },
-							totalCostOfGoods: { $sum: "$costOfGoods" },
-							grossProfit: { $sum: "$grossProfit" },
-							numberOfTransactions: { $sum: 1 },
-						}
-					}
-				]);
-
-				const {
-					totalAmountSales = 0,
-					totalCostOfGoods = 0,
-					grossProfit = 0,
-					numberOfTransactions = 0,
-				} = currentPeriodStats || {};
-
-				const totalDiscounts = 0; // Will be implemented when discount feature is added
-				const totalNetSales = totalAmountSales - totalDiscounts;
-
-				// ===== OPTIMIZED: Get total items sold using aggregation =====
-				const [itemsStats] = await SaleItem.aggregate([
-					{
-						$lookup: {
-							from: 'sales',
-							localField: 'saleId',
-							foreignField: '_id',
-							as: 'sale'
-						}
-					},
-					{ $unwind: '$sale' },
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: null,
-							totalItemsSold: { $sum: "$quantity" }
-						}
-					}
-				]);
-
-				const totalItemsSold = itemsStats?.totalItemsSold || 0;
-
-				// ===== OPTIMIZED: Calculate previous period for percentage comparison =====
-				let totalSalesPercentage = 0;
-				let totalCostPercentage = 0;
-				let grossProfitPercentage = 0;
-
+				// ===== PARALLEL EXECUTION: Run all independent queries at once =====
+				const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+				
+				// Calculate previous period dates if date range is provided
+				let prevPeriodMatch = null;
 				if (startDate && endDate) {
 					const start = new Date(startDate);
 					const end = new Date(endDate);
 					const duration = end.getTime() - start.getTime();
-					
 					const prevStartDate = new Date(start.getTime() - duration);
 					const prevEndDate = new Date(start.getTime());
+					
+					prevPeriodMatch = {
+						status: "COMPLETED",
+						createdAt: {
+							$gte: prevStartDate,
+							$lte: prevEndDate,
+						}
+					};
+				}
 
-					const [prevPeriodStats] = await Sale.aggregate([
+				// Build all queries
+				const cashDrawerMatch: any = { type: "SALE" };
+				if (dateMatch.createdAt) {
+					cashDrawerMatch.createdAt = dateMatch.createdAt;
+				}
+
+				const refundMatch: any = { status: "REFUNDED" };
+				if (dateMatch.createdAt) {
+					refundMatch.createdAt = dateMatch.createdAt;
+				}
+
+				// ===== RUN ALL QUERIES IN PARALLEL =====
+				const [
+					currentPeriodResult,
+					itemsStatsResult,
+					prevPeriodResult,
+					yearsResult,
+					topProductResult,
+					monthlyStatsResult,
+					monthlyItemStatsResult,
+					paymentMethodResult,
+					refundStatsResult,
+					salesByItemResult,
+					salesByCashierResult,
+					hourlyStatsResult
+				] = await Promise.all([
+					// 1. Current period stats
+					Sale.aggregate([
+						{ $match: dateMatch },
 						{
-							$match: {
-								status: "COMPLETED",
-								createdAt: {
-									$gte: prevStartDate,
-									$lte: prevEndDate,
-								}
+							$group: {
+								_id: null,
+								totalAmountSales: { $sum: "$totalAmount" },
+								totalCostOfGoods: { $sum: "$costOfGoods" },
+								grossProfit: { $sum: "$grossProfit" },
+								numberOfTransactions: { $sum: 1 },
+							}
+						}
+					]),
+					
+					// 2. Total items sold
+					SaleItem.aggregate([
+						{
+							$lookup: {
+								from: 'sales',
+								localField: 'saleId',
+								foreignField: '_id',
+								as: 'sale'
 							}
 						},
+						{ $unwind: '$sale' },
+						{ $match: dateMatch },
+						{
+							$group: {
+								_id: null,
+								totalItemsSold: { $sum: "$quantity" }
+							}
+						}
+					]),
+					
+					// 3. Previous period (only if date range provided)
+					prevPeriodMatch ? Sale.aggregate([
+						{ $match: prevPeriodMatch },
 						{
 							$group: {
 								_id: null,
@@ -338,8 +353,237 @@ export const salesResolver = {
 								grossProfit: { $sum: "$grossProfit" },
 							}
 						}
-					]);
+					]) : Promise.resolve([]),
+					
+					// 4. Available years
+					Sale.aggregate([
+						{ $match: { status: "COMPLETED" } },
+						{
+							$group: {
+								_id: { $year: "$createdAt" }
+							}
+						},
+						{ $sort: { _id: -1 } }
+					]),
+					
+					// 5. Top products
+					SaleItem.aggregate([
+						{
+							$lookup: {
+								from: 'sales',
+								localField: 'saleId',
+								foreignField: '_id',
+								as: 'sale'
+							}
+						},
+						{ $unwind: '$sale' },
+						{ $match: dateMatch },
+						{
+							$group: {
+								_id: "$productId",
+								quantity: { $sum: "$quantity" }
+							}
+						},
+						{ $sort: { quantity: -1 } },
+						{ $limit: 10 },
+						{
+							$lookup: {
+								from: 'products',
+								localField: '_id',
+								foreignField: '_id',
+								as: 'product'
+							}
+						},
+						{ $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+						{
+							$project: {
+								_id: 0,
+								name: { $ifNull: ['$product.name', 'Unknown Product'] },
+								quantity: 1
+							}
+						}
+					]),
+					
+					// 6. Monthly sales stats
+					Sale.aggregate([
+						{
+							$match: {
+								status: "COMPLETED",
+								createdAt: {
+									$gte: new Date(selectedYear, 0, 1),
+									$lte: new Date(selectedYear, 11, 31, 23, 59, 59)
+								}
+							}
+						},
+						{
+							$group: {
+								_id: { $month: "$createdAt" },
+								totalAmountSales: { $sum: "$totalAmount" },
+								totalCostOfGoods: { $sum: "$costOfGoods" },
+								grossProfit: { $sum: "$grossProfit" },
+							}
+						},
+						{ $sort: { _id: 1 } }
+					]),
+					
+					// 7. Monthly item stats
+					SaleItem.aggregate([
+						{
+							$lookup: {
+								from: 'sales',
+								localField: 'saleId',
+								foreignField: '_id',
+								as: 'sale'
+							}
+						},
+						{ $unwind: '$sale' },
+						{
+							$match: {
+								'sale.status': 'COMPLETED',
+								'sale.createdAt': {
+									$gte: new Date(selectedYear, 0, 1),
+									$lte: new Date(selectedYear, 11, 31, 23, 59, 59)
+								}
+							}
+						},
+						{
+							$group: {
+								_id: { $month: "$sale.createdAt" },
+								totalItemsSold: { $sum: "$quantity" }
+							}
+						}
+					]),
+					
+					// 8. Payment methods
+					CashDrawer.aggregate([
+						{ $match: cashDrawerMatch },
+						{
+							$group: {
+								_id: { $ifNull: ["$paymentMethod", "CASH"] },
+								totalAmount: { $sum: "$amount" },
+								count: { $sum: 1 }
+							}
+						},
+						{
+							$project: {
+								_id: 0,
+								paymentMethod: "$_id",
+								totalAmount: 1,
+								count: 1
+							}
+						}
+					]),
+					
+					// 9. Refunds
+					Sale.aggregate([
+						{ $match: refundMatch },
+						{
+							$group: {
+								_id: null,
+								totalRefunds: { $sum: "$totalAmount" },
+								numberOfRefunds: { $sum: 1 }
+							}
+						}
+					]),
+					
+					// 10. Sales by item
+					SaleItem.aggregate([
+						{
+							$lookup: {
+								from: 'sales',
+								localField: 'saleId',
+								foreignField: '_id',
+								as: 'sale'
+							}
+						},
+						{ $unwind: '$sale' },
+						{ $match: dateMatch },
+						{
+							$group: {
+								_id: "$productId",
+								quantity: { $sum: "$quantity" },
+								totalAmount: { $sum: { $multiply: ["$priceAtSale", "$quantity"] } }
+							}
+						},
+						{ $sort: { totalAmount: -1 } },
+						{ $limit: 10 },
+						{
+							$lookup: {
+								from: 'products',
+								localField: '_id',
+								foreignField: '_id',
+								as: 'product'
+							}
+						},
+						{ $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+						{
+							$project: {
+								_id: 0,
+								itemName: { $ifNull: ['$product.name', 'Unknown Product'] },
+								quantity: 1,
+								totalAmount: 1
+							}
+						}
+					]),
+					
+					// 11. Sales by cashier
+					Sale.aggregate([
+						{ $match: dateMatch },
+						{
+							$group: {
+								_id: { $ifNull: ["$cashierName", "Unknown"] },
+								totalAmount: { $sum: "$totalAmount" },
+								count: { $sum: 1 }
+							}
+						},
+						{
+							$project: {
+								_id: 0,
+								cashierName: "$_id",
+								totalAmount: 1,
+								count: 1
+							}
+						}
+					]),
+					
+					// 12. Sales by hour
+					Sale.aggregate([
+						{ $match: dateMatch },
+						{
+							$group: {
+								_id: { $hour: "$createdAt" },
+								totalAmount: { $sum: "$totalAmount" },
+								count: { $sum: 1 }
+							}
+						}
+					])
+				]);
 
+				// ===== PROCESS RESULTS =====
+				
+				// Current period stats
+				const [currentPeriodStats] = currentPeriodResult;
+				const {
+					totalAmountSales = 0,
+					totalCostOfGoods = 0,
+					grossProfit = 0,
+					numberOfTransactions = 0,
+				} = currentPeriodStats || {};
+
+				const totalDiscounts = 0;
+				const totalNetSales = totalAmountSales - totalDiscounts;
+
+				// Total items sold
+				const [itemsStats] = itemsStatsResult;
+				const totalItemsSold = itemsStats?.totalItemsSold || 0;
+
+				// Previous period percentages
+				let totalSalesPercentage = 0;
+				let totalCostPercentage = 0;
+				let grossProfitPercentage = 0;
+
+				if (prevPeriodResult.length > 0) {
+					const [prevPeriodStats] = prevPeriodResult;
 					if (prevPeriodStats) {
 						const { totalAmount: prevTotalAmount = 0, totalCost: prevTotalCost = 0, grossProfit: prevGrossProfit = 0 } = prevPeriodStats;
 
@@ -355,109 +599,15 @@ export const salesResolver = {
 					}
 				}
 
-				// ===== OPTIMIZED: Get available years using aggregation =====
-				const yearsResult = await Sale.aggregate([
-					{ $match: { status: "COMPLETED" } },
-					{
-						$group: {
-							_id: { $year: "$createdAt" }
-						}
-					},
-					{ $sort: { _id: -1 } }
-				]);
+				// Available years
 				const availableYears = yearsResult.map((y: any) => y._id);
 
-				// ===== OPTIMIZED: Get top products sold using aggregation =====
-				const topProductSold = await SaleItem.aggregate([
-					{
-						$lookup: {
-							from: 'sales',
-							localField: 'saleId',
-							foreignField: '_id',
-							as: 'sale'
-						}
-					},
-					{ $unwind: '$sale' },
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: "$productId",
-							quantity: { $sum: "$quantity" }
-						}
-					},
-					{ $sort: { quantity: -1 } },
-					{ $limit: 10 },
-					{
-						$lookup: {
-							from: 'products',
-							localField: '_id',
-							foreignField: '_id',
-							as: 'product'
-						}
-					},
-					{ $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
-					{
-						$project: {
-							_id: 0,
-							name: { $ifNull: ['$product.name', 'Unknown Product'] },
-							quantity: 1
-						}
-					}
-				]);
+				// Top products
+				const topProductSold = topProductResult;
 
-				// ===== OPTIMIZED: Get monthly sales data using aggregation =====
-				const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-				const monthlyStats = await Sale.aggregate([
-					{
-						$match: {
-							status: "COMPLETED",
-							createdAt: {
-								$gte: new Date(selectedYear, 0, 1),
-								$lte: new Date(selectedYear, 11, 31, 23, 59, 59)
-							}
-						}
-					},
-					{
-						$group: {
-							_id: { $month: "$createdAt" },
-							totalAmountSales: { $sum: "$totalAmount" },
-							totalCostOfGoods: { $sum: "$costOfGoods" },
-							grossProfit: { $sum: "$grossProfit" },
-						}
-					},
-					{ $sort: { _id: 1 } }
-				]);
-
-				// Get items sold per month
-				const monthlyItemStats = await SaleItem.aggregate([
-					{
-						$lookup: {
-							from: 'sales',
-							localField: 'saleId',
-							foreignField: '_id',
-							as: 'sale'
-						}
-					},
-					{ $unwind: '$sale' },
-					{
-						$match: {
-							'sale.status': 'COMPLETED',
-							'sale.createdAt': {
-								$gte: new Date(selectedYear, 0, 1),
-								$lte: new Date(selectedYear, 11, 31, 23, 59, 59)
-							}
-						}
-					},
-					{
-						$group: {
-							_id: { $month: "$sale.createdAt" },
-							totalItemsSold: { $sum: "$quantity" }
-						}
-					}
-				]);
-
-				const monthlyItemsMap = new Map(monthlyItemStats.map((m: any) => [m._id, m.totalItemsSold]));
-				const monthlyStatsMap = new Map(monthlyStats.map((m: any) => [m._id, m]));
+				// Monthly data
+				const monthlyItemsMap = new Map(monthlyItemStatsResult.map((m: any) => [m._id, m.totalItemsSold]));
+				const monthlyStatsMap = new Map(monthlyStatsResult.map((m: any) => [m._id, m]));
 				
 				const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 				const groupSales = monthNames.map((name, index) => {
@@ -472,123 +622,21 @@ export const salesResolver = {
 					};
 				});
 
-				// ===== OPTIMIZED: Sales by payment method using aggregation =====
-				const cashDrawerMatch: any = { type: "SALE" };
-				if (dateMatch.createdAt) {
-					cashDrawerMatch.createdAt = dateMatch.createdAt;
-				}
+				// Payment methods
+				const salesByPaymentMethod = paymentMethodResult;
 
-				const salesByPaymentMethod = await CashDrawer.aggregate([
-					{ $match: cashDrawerMatch },
-					{
-						$group: {
-							_id: { $ifNull: ["$paymentMethod", "CASH"] },
-							totalAmount: { $sum: "$amount" },
-							count: { $sum: 1 }
-						}
-					},
-					{
-						$project: {
-							_id: 0,
-							paymentMethod: "$_id",
-							totalAmount: 1,
-							count: 1
-						}
-					}
-				]);
-
-				// ===== OPTIMIZED: Refunds using aggregation =====
-				const refundMatch: any = { status: "REFUNDED" };
-				if (dateMatch.createdAt) {
-					refundMatch.createdAt = dateMatch.createdAt;
-				}
-
-				const [refundStats] = await Sale.aggregate([
-					{ $match: refundMatch },
-					{
-						$group: {
-							_id: null,
-							totalRefunds: { $sum: "$totalAmount" },
-							numberOfRefunds: { $sum: 1 }
-						}
-					}
-				]);
-
+				// Refunds
+				const [refundStats] = refundStatsResult;
 				const { totalRefunds = 0, numberOfRefunds = 0 } = refundStats || {};
 
-				// ===== OPTIMIZED: Sales by item using aggregation =====
-				const salesByItem = await SaleItem.aggregate([
-					{
-						$lookup: {
-							from: 'sales',
-							localField: 'saleId',
-							foreignField: '_id',
-							as: 'sale'
-						}
-					},
-					{ $unwind: '$sale' },
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: "$productId",
-							quantity: { $sum: "$quantity" },
-							totalAmount: { $sum: { $multiply: ["$priceAtSale", "$quantity"] } }
-						}
-					},
-					{ $sort: { totalAmount: -1 } },
-					{ $limit: 10 },
-					{
-						$lookup: {
-							from: 'products',
-							localField: '_id',
-							foreignField: '_id',
-							as: 'product'
-						}
-					},
-					{ $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
-					{
-						$project: {
-							_id: 0,
-							itemName: { $ifNull: ['$product.name', 'Unknown Product'] },
-							quantity: 1,
-							totalAmount: 1
-						}
-					}
-				]);
+				// Sales by item
+				const salesByItem = salesByItemResult;
 
-				// ===== OPTIMIZED: Sales by cashier using aggregation =====
-				const salesByCashier = await Sale.aggregate([
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: { $ifNull: ["$cashierName", "Unknown"] },
-							totalAmount: { $sum: "$totalAmount" },
-							count: { $sum: 1 }
-						}
-					},
-					{
-						$project: {
-							_id: 0,
-							cashierName: "$_id",
-							totalAmount: 1,
-							count: 1
-						}
-					}
-				]);
+				// Sales by cashier
+				const salesByCashier = salesByCashierResult;
 
-				// ===== OPTIMIZED: Sales by hour using aggregation =====
-				const hourlyStats = await Sale.aggregate([
-					{ $match: dateMatch },
-					{
-						$group: {
-							_id: { $hour: "$createdAt" },
-							totalAmount: { $sum: "$totalAmount" },
-							count: { $sum: 1 }
-						}
-					}
-				]);
-
-				const hourStatsMap = new Map(hourlyStats.map((h: any) => [h._id, h]));
+				// Sales by hour
+				const hourStatsMap = new Map(hourlyStatsResult.map((h: any) => [h._id, h]));
 				const salesByHour = Array.from({ length: 24 }, (_, h) => {
 					const stats: any = hourStatsMap.get(h);
 					return {
@@ -599,7 +647,7 @@ export const salesResolver = {
 				});
 
 				const endTime = Date.now();
-				console.log(`✅ Sale report generated in ${endTime - startTime}ms`);
+				console.log(`✅ Sale report generated in ${endTime - startTime}ms (12 parallel queries)`);
 
 				return {
 					grossProfit,
